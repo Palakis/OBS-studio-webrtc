@@ -7,6 +7,7 @@ sudo apt-get -qq update
 sudo apt-get install -y \
         build-essential \
         checkinstall \
+        clang \
         cmake \
         libasound2-dev \
         libavcodec-dev \
@@ -46,11 +47,23 @@ sudo apt-get install -y \
         qtbase5-dev \
         libqt5svg5-dev \
         swig \
-        libssl-dev
+        libssl-dev \
+        libgtkglext1-dev \
+        libxi-dev
 
 # build cef
-wget --quiet --retry-connrefused --waitretry=1 https://cdn-fastly.obsproject.com/downloads/cef_binary_${CEF_BUILD_VERSION}_linux64.tar.bz2
-tar -xjf ./cef_binary_${CEF_BUILD_VERSION}_linux64.tar.bz2
+export CC=clang
+export CXX=clang++
+wget --quiet --retry-connrefused --waitretry=1 https://cef-builds.spotifycdn.com/cef_binary_75.1.14%2Bgc81164e%2Bchromium-75.0.3770.100_linux64.tar.bz2
+tar -xjf ./cef_binary_75.1.14+gc81164e+chromium-75.0.3770.100_linux64.tar.bz2
+cd cef_binary_75.1.14+gc81164e+chromium-75.0.3770.100_linux64
+# Rename "tests" directory to avoid error when compiling tests
+mv tests tests.renamed
+mkdir build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-stdlib=libc++"
+make -j4
+cd ../..
 
 # libwebrtc
 wget --quiet --retry-connrefused --waitretry=1 https://www.palakis.fr/obs/obs-studio-webrtc/libWebRTC-${LIBWEBRTC_VERSION}-x64-Release-Community.sh -O libWebRTC.sh

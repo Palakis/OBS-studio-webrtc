@@ -5,10 +5,19 @@ variables:
   CEF_BUILD_VERSION: 3770
   CEF_VERSION: 75.1.16+g16a67c4+chromium-75.0.3770.100
   LIBWEBRTC_VERSION: 84.0
+  OBS_VERSION: 26.0
   TWITCH-CLIENTID: $(twitch_clientid)
   TWITCH-HASH: $(twitch_hash)
   RESTREAM-CLIENTID: $(restream_clientid)
   RESTREAM-HASH: $(restream_hash)
+
+parameters:
+  - name: vendors
+    type: object
+    default:
+    - Millicast
+    - PacPost
+#    - RemoteFilming
 
 jobs:
 - job: 'Build_macOS'
@@ -17,18 +26,19 @@ jobs:
   steps:
   - script: git submodule update --init --recursive
     displayName: 'Checkout Submodules'
-  - script: TERM="" ./CI/full-build-macos.sh
-    displayName: 'Install dependencies and build'
-  - script: TERM="" ./CI/full-build-macos.sh -s -d -b -p
-    displayName: 'Before Deploy'
-  - bash: |
-      mkdir -p ./nightly
-      find ./build -name \*.dmg -exec cp -PR \{\} ./nightly/ \;
-    displayName: 'Copy disk image'
-  - task: PublishBuildArtifacts@1
-    inputs:
-      pathtoPublish: './nightly'
-      artifactName: macbuild
+  - ${{ each vendor in parameters.vendors }}:
+    - script: TERM="" ./CI/full-build-macos.sh -v ${{ vendor }}
+      displayName: '${{ vendor }} Install dependencies and build'
+    - script: TERM="" ./CI/full-build-macos.sh -s -d -b -p -v ${{ vendor }}
+      displayName: '${{ vendor }} Before Deploy'
+    - bash: |
+        mkdir -p ./nightly_${{ vendor }}
+        find ./build_${{ vendor }} -name \*.dmg -exec cp -PR \{\} ./nightly_${{ vendor }}/ \;
+      displayName: '${{ vendor }} Copy disk image'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        pathtoPublish: './nightly_${{ vendor }}'
+        artifactName: macbuild_${{ vendor }}
 
 - job: 'Build_Windows64'
   pool:
@@ -38,49 +48,47 @@ jobs:
     displayName: 'Checkout Submodules'
   - script: ./CI/install-qt-win.cmd
     displayName: 'Install QT'
-  - script: ./CI/install-script-win.cmd
-    displayName: 'Download / Setup Deps / Run CMake'
-  - task: MSBuild@1
-    displayName: 'Build 64-bit'
-    inputs:
-      msbuildArguments: '/m /p:Configuration=Release'
-      solution: .\build64\obs-studio.sln
-  - script: ./CI/before-deploy-win.cmd
-    displayName: 'Before deploy'
-  - task: PublishBuildArtifacts@1
-    inputs:
-      pathtoPublish: './build'
-      artifactName: winbuild
+  - script: ./CI/install-dependencies-win.cmd
+    displayName: 'Download / Setup Dependencies'
+  - ${{ each vendor in parameters.vendors }}:
+    - script: ./CI/install-script-win.cmd ${{ vendor }}
+      displayName: '${{ vendor }} Run CMake'
+    - task: MSBuild@1
+      displayName: '${{ vendor }} Build 64-bit'
+      inputs:
+        msbuildArguments: '/m /p:Configuration=Release'
+        solution: .\build64_${{ vendor }}\${{ vendor }}.sln
+    - script: ./CI/before-deploy-win.cmd ${{ vendor }}
+      displayName: '${{ vendor }} Before deploy'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        pathtoPublish: './build_${{ vendor }}'
+        artifactName: winbuild_${{ vendor }}
 
 - job: 'Build_Linux'
   pool:
-    vmImage: 'ubuntu-18.04'
+    vmImage: 'ubuntu-20.04'
   steps:
-  - script: git submodule update --init --recursive
-    displayName: 'Checkout Submodules'
-  - script: ./CI/install-dependencies-linux.sh
-    displayName: 'Install Dependencies'
-
-  - script: ./CI/before-script-linux.sh
-    displayName: 'CMake'
-
   - bash: |
-      set -e
-      cd ./build
-      make -j4
-      cd -
-    displayName: 'Build'
-
-  - bash: |
-      cd ./build
-      sudo checkinstall --default --install=no --pkgname=obs-studio-webrtc --fstrans=yes --backup=no --pkgversion="$(date +%Y%m%d)-git" --deldoc=yes
-      mkdir ../package
-      mv *.deb ../package/
-      cd -
-    displayName: 'Package'
-
-  - task: PublishBuildArtifacts@1
-    inputs:
-      pathtoPublish: './package'
-      artifactName: 'debbuild'
-
+      git submodule update --init --recursive
+      ./CI/install-dependencies-linux.sh
+    displayName: 'checkout and dependencies'
+  - ${{ each vendor in parameters.vendors }}:
+    - bash: |
+        set -e
+        git stash
+        mkdir build_${{ vendor }}
+        ./CI/before-script-linux.sh ${{ vendor }}
+        cd build_${{ vendor }}
+        make -j4
+        cd ..
+        mkdir package_${{ vendor }}
+        cd build_${{ vendor }}
+        cpack -G DEB
+        mv *.deb ../package_s${{ vendor }}
+        cd ..
+      displayName: '${{ vendor }} cmake, build, package'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        pathtoPublish: './package_${{ vendor }}'
+        artifactName: 'debbuild_${{ vendor }}'

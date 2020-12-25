@@ -19,22 +19,15 @@ struct QCefCookieManager;
 extern QCef *cef;
 extern QCefCookieManager *panel_cookies;
 
-enum class ListOpt : int {
-	ShowAll = 1,
-	Custom,
-};
+enum class ListOpt : int { ShowAll = 1, Custom, Millicast, CustomWebrtc };
 
 enum class Section : int {
 	Connect,
 	StreamKey,
 };
 
-std::vector<std::string> webrtc_services = {
-	"webrtc_janus",
-	"webrtc_wowza",
-	"webrtc_millicast",
-	"webrtc_evercast"
-};
+std::vector<std::string> webrtc_services = {"webrtc_millicast",
+					    "webrtc_custom"};
 std::vector<std::string>::size_type webrtc_count = webrtc_services.size();
 
 inline bool OBSBasicSettings::IsCustomService() const
@@ -148,8 +141,15 @@ void OBSBasicSettings::LoadStream1Settings()
 		const char *protocol = strcmp("", tmpString) == 0 ? "Automatic"
 								  : tmpString;
 
+		bool simulcast = obs_data_get_bool(settings, "simulcast");
+		ui->simulcastEnable->setChecked(simulcast);
+
+		const char *publish_api_url =
+			obs_data_get_string(settings, "publish_api_url");
+
 		int idx = 0;
-		for (std::vector<std::string>::size_type i = 0; i < webrtc_count; ++i) {
+		for (std::vector<std::string>::size_type i = 0;
+		     i < webrtc_count; ++i) {
 			if (std::string(type) == webrtc_services[i]) {
 				idx = i + 1;
 				break;
@@ -169,6 +169,8 @@ void OBSBasicSettings::LoadStream1Settings()
 
 		int idxP = ui->streamProtocol->findText(protocol);
 		ui->streamProtocol->setCurrentIndex(idxP);
+
+		ui->publishApiUrl->setText(publish_api_url);
 	}
 
 	UpdateServerList();
@@ -234,17 +236,22 @@ void OBSBasicSettings::SaveStream1Settings()
 		}
 	} else if (webrtc > 0) {
 		obs_data_set_string(settings, "server",
-			QT_TO_UTF8(ui->customServer->text()));
+				    QT_TO_UTF8(ui->customServer->text()));
 		obs_data_set_string(settings, "room",
-			QT_TO_UTF8(ui->room->text()));
+				    QT_TO_UTF8(ui->room->text()));
 		obs_data_set_string(settings, "username",
-			QT_TO_UTF8(ui->authUsername->text()));
+				    QT_TO_UTF8(ui->authUsername->text()));
 		obs_data_set_string(settings, "password",
-			QT_TO_UTF8(ui->authPw->text()));
+				    QT_TO_UTF8(ui->authPw->text()));
 		obs_data_set_string(settings, "codec",
-			QT_TO_UTF8(ui->codec->currentText()));
-		obs_data_set_string(settings, "protocol",
+				    QT_TO_UTF8(ui->codec->currentText()));
+		obs_data_set_string(
+			settings, "protocol",
 			QT_TO_UTF8(ui->streamProtocol->currentText()));
+		obs_data_set_bool(settings, "simulcast",
+				  ui->simulcastEnable->isChecked());
+		obs_data_set_string(settings, "publish_api_url",
+				    QT_TO_UTF8(ui->publishApiUrl->text()));
 	}
 
 	if (!!auth && strcmp(auth->service(), "Twitch") == 0) {
@@ -358,9 +365,10 @@ void OBSBasicSettings::LoadServices(bool showAll)
 	}
 
 	for (std::vector<std::string>::size_type i = webrtc_count; i-- > 0;) {
-		ui->service->insertItem(
-			0, obs_service_get_display_name(webrtc_services[i].c_str()),
-			QVariant((int)i + 3));
+		ui->service->insertItem(0,
+					obs_service_get_display_name(
+						webrtc_services[i].c_str()),
+					QVariant((int)i + 3));
 	}
 
 	ui->service->insertItem(
@@ -455,6 +463,10 @@ void OBSBasicSettings::on_service_currentIndexChanged(int)
 		ui->codec->setVisible(false);
 		ui->streamProtocolLabel->setVisible(false);
 		ui->streamProtocol->setVisible(false);
+		ui->streamingAdvancedSettingsButton->setVisible(false);
+		ui->simulcastEnable->setVisible(false);
+		ui->publishApiUrlLabel->setVisible(false);
+		ui->publishApiUrl->setVisible(false);
 	} else if (webrtc > 0) {
 		ui->streamKeyLabel->setVisible(false);
 		ui->streamKeyWidget->setVisible(false);
@@ -470,6 +482,12 @@ void OBSBasicSettings::on_service_currentIndexChanged(int)
 		obs_property_t *password =
 			obs_properties_get(props, "password");
 		obs_property_t *codec = obs_properties_get(props, "codec");
+		obs_property_t *streamingAdvancedSettings = obs_properties_get(
+			props, "streaming_advanced_settings");
+		obs_property_t *simulcast =
+			obs_properties_get(props, "simulcast");
+		obs_property_t *publishApiUrl =
+			obs_properties_get(props, "publish_api_url");
 		obs_property_t *protocol =
 			obs_properties_get(props, "protocol");
 		ui->serverLabel->setText(obs_property_description(server));
@@ -526,6 +544,10 @@ void OBSBasicSettings::on_service_currentIndexChanged(int)
 		ui->streamProtocolLabel->setVisible(
 			obs_property_visible(protocol));
 		ui->streamProtocol->setVisible(obs_property_visible(protocol));
+		ui->streamingAdvancedSettingsButton->setVisible(true);
+		ui->simulcastEnable->setVisible(false);
+		ui->publishApiUrlLabel->setVisible(false);
+		ui->publishApiUrl->setVisible(false);
 		obs_properties_destroy(props);
 	} else if (!custom && webrtc == 0) {
 		ui->authUsernameLabel->setText("Username");
@@ -554,6 +576,10 @@ void OBSBasicSettings::on_service_currentIndexChanged(int)
 		ui->streamProtocol->setVisible(false);
 		ui->codecLabel->setVisible(false);
 		ui->codec->setVisible(false);
+		ui->streamingAdvancedSettingsButton->setVisible(false);
+		ui->simulcastEnable->setVisible(false);
+		ui->publishApiUrlLabel->setVisible(false);
+		ui->publishApiUrl->setVisible(false);
 	}
 
 #ifdef BROWSER_AVAILABLE
@@ -631,14 +657,14 @@ OBSService OBSBasicSettings::SpawnTempService()
 	bool custom = IsCustomService();
 	int webrtc = IsWebRTC();
 
-	const char *service_id = webrtc == 0
-		? custom ? "rtmp_custom" : "rtmp_common"
-		: webrtc_services[webrtc - 3].c_str();
+	const char *service_id =
+		webrtc == 0 ? custom ? "rtmp_custom" : "rtmp_common"
+			    : webrtc_services[webrtc - 3].c_str();
 
 	OBSData settings = obs_data_create();
 	obs_data_release(settings);
 
-	if (!custom) {
+	if (!custom && webrtc == 0) {
 		obs_data_set_string(settings, "service",
 				    QT_TO_UTF8(ui->service->currentText()));
 		obs_data_set_string(

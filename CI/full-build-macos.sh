@@ -45,6 +45,7 @@ CI_DEPS_VERSION=$(cat ${CI_WORKFLOW} | sed -En "s/[ ]+MACOS_DEPS_VERSION: '([0-9
 CI_VLC_VERSION=$(cat ${CI_WORKFLOW} | sed -En "s/[ ]+VLC_VERSION: '([0-9\.]+)'/\1/p")
 CI_QT_VERSION=$(cat ${CI_WORKFLOW} | sed -En "s/[ ]+QT_VERSION: '([0-9\.]+)'/\1/p" | head -1)
 CI_LIBWEBRTC_VERSION=$(cat ${CI_WORKFLOW} | sed -En "s/[ ]+LIBWEBRTC_VERSION: '([0-9\.]+)'/\1/p" | head -1)
+VENDOR="${VENDOR:-toto}"
 
 BUILD_DEPS=(
     "obs-deps ${MACOS_DEPS_VERSION:-${CI_DEPS_VERSION}}"
@@ -100,7 +101,7 @@ ensure_dir() {
 }
 
 cleanup() {
-    rm -rf "${CHECKOUT_DIR}/${BUILD_DIR}/settings.json"
+    rm -rf "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}/settings.json"
     unset CODESIGN_IDENT
     unset CODESIGN_IDENT_USER
     unset CODESIGN_IDENT_PASS
@@ -190,10 +191,10 @@ install_cef() {
     hr "Building dependency CEF v${1}"
     ensure_dir ${DEPS_BUILD_DIR}
     step "Download..."
-    ${CURLCMD} --progress-bar -L -C - -O https://obs-nightly.s3-us-west-2.amazonaws.com/cef_binary_${1}_macosx64.tar.bz2
+    ${CURLCMD} --progress-bar -L -C - -O https://cef-builds.spotifycdn.com/cef_binary_75.1.14%2Bgc81164e%2Bchromium-75.0.3770.100_macosx64.tar.bz2
     step "Unpack..."
-    tar -xf ./cef_binary_${1}_macosx64.tar.bz2
-    cd ./cef_binary_${1}_macosx64
+    tar -xf ./cef_binary_75.1.14%2Bgc81164e%2Bchromium-75.0.3770.100_macosx64.tar.bz2
+    cd ./cef_binary_75.1.14+gc81164e+chromium-75.0.3770.100_macosx64
     step "Fix tests..."
     # remove a broken test
     sed -i '.orig' '/add_subdirectory(tests\/ceftests)/d' ./CMakeLists.txt
@@ -212,6 +213,10 @@ install_cef() {
 }
 
 install_libwebrtc() {
+    if [ -d ${DEPS_BUILD_DIR}/libwebrtc ]; then
+        ## libwebrtc has already been retrieved and installed
+        return
+    fi
     hr "Installing LibWebRTC v${1}"
     ensure_dir ${DEPS_BUILD_DIR}
     step "Download..."
@@ -242,7 +247,7 @@ install_dmgbuild() {
 
 ## OBS BUILD FROM SOURCE ##
 configure_obs_build() {
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
 
     CUR_DATE=$(date +"%Y-%m-%d@%H%M%S")
     NIGHTLY_DIR="${CHECKOUT_DIR}/nightly-${CUR_DATE}"
@@ -250,17 +255,24 @@ configure_obs_build() {
 
     if [ -d ./OBS-WebRTC.app ]; then
         ensure_dir "${NIGHTLY_DIR}"
-        mv ../${BUILD_DIR}/OBS-WebRTC.app .
+        mv ../${BUILD_DIR}_${VENDOR}/OBS-WebRTC.app .
         info "You can find OBS-WebRTC.app in ${NIGHTLY_DIR}"
     fi
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
     if ([ -n "${PACKAGE_NAME}" ] && [ -f ${PACKAGE_NAME} ]); then
         ensure_dir "${NIGHTLY_DIR}"
-        mv ../${BUILD_DIR}/$(basename "${PACKAGE_NAME}") .
+        mv ../${BUILD_DIR}_${VENDOR}/$(basename "${PACKAGE_NAME}") .
         info "You can find ${PACKAGE_NAME} in ${NIGHTLY_DIR}"
     fi
 
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
+
+    if [ "${VENDOR}" == "Millicast" ]
+    then
+        vendor_option=""
+    else
+        vendor_option="-DOBS_WEBRTC_VENDOR_NAME=${VENDOR}"
+    fi
 
     hr "Run CMAKE for OBS..."
     cmake -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
@@ -273,22 +285,23 @@ configure_obs_build() {
         -DBROWSER_DEPLOY=ON \
         -DBUILD_CAPTIONS=ON \
         -DWITH_RTMPS=ON \
-        -DCEF_ROOT_DIR="${DEPS_BUILD_DIR}/cef_binary_${CEF_BUILD_VERSION:-${CI_CEF_VERSION}}_macosx64" \
+        -DCEF_ROOT_DIR="${DEPS_BUILD_DIR}/cef_binary_75.1.14+gc81164e+chromium-75.0.3770.100_macosx64" \
 	-DWEBRTC_ROOT_DIR="${DEPS_BUILD_DIR}/libwebrtc" \
 	-DOPENSSL_ROOT_DIR="/usr/local/opt/openssl@1.1" \
-        ..
+        .. \
+        ${vendor_option}
 
 }
 
 run_obs_build() {
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
     hr "Build OBS..."
     make -j4
 }
 
 ## OBS BUNDLE AS MACOS APPLICATION ##
 bundle_dylibs() {
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
 
     if [ ! -d ./OBS-WebRTC.app ]; then
         error "No OBS-WebRTC.app bundle found"
@@ -305,7 +318,6 @@ bundle_dylibs() {
         -x ./OBS-WebRTC.app/Contents/PlugIns/decklink-ouput-ui.so \
         -x ./OBS-WebRTC.app/Contents/PlugIns/frontend-tools.so \
         -x ./OBS-WebRTC.app/Contents/PlugIns/image-source.so \
-        -x ./OBS-WebRTC.app/Contents/PlugIns/linux-jack.so \
         -x ./OBS-WebRTC.app/Contents/PlugIns/mac-avcapture.so \
         -x ./OBS-WebRTC.app/Contents/PlugIns/mac-capture.so \
         -x ./OBS-WebRTC.app/Contents/PlugIns/mac-decklink.so \
@@ -324,6 +336,7 @@ bundle_dylibs() {
         -x ./OBS-WebRTC.app/Contents/PlugIns/text-freetype2.so \
         -x ./OBS-WebRTC.app/Contents/PlugIns/obs-libfdk.so \
         -x ./OBS-WebRTC.app/Contents/PlugIns/obs-outputs.so
+#        -x ./OBS-WebRTC.app/Contents/PlugIns/linux-jack.so \
     step "Move libobs-opengl to final destination"
     cp ./libobs-opengl/libobs-opengl.so ./OBS-WebRTC.app/Contents/Frameworks
 
@@ -338,7 +351,7 @@ bundle_dylibs() {
 }
 
 install_frameworks() {
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
 
     if [ ! -d ./OBS-WebRTC.app ]; then
         error "No OBS-WebRTC.app bundle found"
@@ -347,12 +360,12 @@ install_frameworks() {
 
     hr "Adding Chromium Embedded Framework"
     step "Copy Framework..."
-    sudo cp -R "${DEPS_BUILD_DIR}/cef_binary_${CEF_BUILD_VERSION:-${CI_CEF_VERSION}}_macosx64/Release/Chromium Embedded Framework.framework" ./OBS-WebRTC.app/Contents/Frameworks/
+    sudo cp -R "${DEPS_BUILD_DIR}/cef_binary_75.1.14+gc81164e+chromium-75.0.3770.100_macosx64/Release/Chromium Embedded Framework.framework" ./OBS-WebRTC.app/Contents/Frameworks/
     sudo chown -R $(whoami) ./OBS-WebRTC.app/Contents/Frameworks/
 }
 
 prepare_macos_bundle() {
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
 
     if [ ! -d ./rundir/RelWithDebInfo/bin ]; then
         error "No OBS build found"
@@ -397,7 +410,7 @@ prepare_macos_bundle() {
 
 ## CREATE MACOS DISTRIBUTION AND INSTALLER IMAGE ##
 prepare_macos_image() {
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
 
     if [ ! -d ./OBS-WebRTC.app ]; then
         error "No OBS-WebRTC.app bundle found"
@@ -414,7 +427,7 @@ prepare_macos_image() {
     cp "${CI_SCRIPTS}/package/settings.json.template" ./settings.json
     sed -i '' 's#\$\$VERSION\$\$#'"${GIT_TAG}"'#g' ./settings.json
     sed -i '' 's#\$\$CI_PATH\$\$#'"${CI_SCRIPTS}"'#g' ./settings.json
-    sed -i '' 's#\$\$BUNDLE_PATH\$\$#'"${CHECKOUT_DIR}"'/build#g' ./settings.json
+    sed -i '' 's#\$\$BUNDLE_PATH\$\$#'"${CHECKOUT_DIR}"'/build_'"${VENDOR}"'#g' ./settings.json
     echo -n "${COLOR_ORANGE}"
     dmgbuild "OBS-Studio-WebRTC ${GIT_TAG}" "${FILE_NAME}" -s ./settings.json
     echo -n "${COLOR_RESET}"
@@ -467,7 +480,7 @@ read_codesign_pass() {
 codesign_bundle() {
     if [ ! -n "${CODESIGN_OBS}" ]; then step "Skipping application bundle code signing"; return; fi
 
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
     trap "caught_error 'code-signing app'" ERR
 
     if [ ! -d ./OBS-WebRTC.app ]; then
@@ -508,7 +521,7 @@ codesign_bundle() {
 codesign_image() {
     if [ ! -n "${CODESIGN_OBS}" ]; then step "Skipping installer image code signing"; return; fi
 
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
     trap "caught_error 'code-signing image'" ERR
 
     if [ ! -f "${FILE_NAME}" ]; then
@@ -580,7 +593,7 @@ notarize_macos() {
     hr "Notarizing OBS for macOS"
     trap "caught_error 'notarizing app'" ERR
 
-    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}"
+    ensure_dir "${CHECKOUT_DIR}/${BUILD_DIR}_${VENDOR}"
 
     if [ -f "${FILE_NAME}" ]; then
         NOTARIZE_TARGET="${FILE_NAME}"
@@ -638,7 +651,7 @@ obs-build-main() {
     #
     ##########################################################################
 
-    while getopts ":hdsbnpc" OPTION; do
+    while getopts ":hdsbnpcv:" OPTION; do
         case ${OPTION} in
             h) print_usage ;;
             d) SKIP_DEPS=1 ;;
@@ -647,6 +660,7 @@ obs-build-main() {
             n) CODESIGN_OBS=1; NOTARIZE_OBS=1 ;;
             p) PACKAGE_OBS=1 ;;
             c) CODESIGN_OBS=1 ;;
+            v) VENDOR="${OPTARG}" ;;
             \?) ;;
         esac
     done
