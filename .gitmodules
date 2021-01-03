@@ -25,3 +25,9 @@
 [submodule "plugins/websocket-client/nlohmann_json"]
 	path = plugins/websocket-client/nlohmann_json
 	url = https://github.com/nlohmann/json.git
+[submodule "plugins/obs-websocket"]
+	path = plugins/obs-websocket
+	url = https://github.com/Palakis/obs-websocket.git
+[submodule "plugins/obs-ndi"]
+	path = plugins/obs-ndi
+	url = https://github.com/Palakis/obs-ndi.git
